@@ -1,10 +1,6 @@
-# City-of-Bloomington.winbind
+# winbind.joindomain
 
 Install winbind, and join a linux host to an Active Directory domain
-
-## Dependencies
-
-City-of-Bloomington.linux
 
 # Requirements
 
@@ -79,7 +75,7 @@ winbind_groupmap_users:
 - hosts: winbind
   become: yes
   roles:
-    - City-of-Bloomington.winbind
+    - winbind.joindomain
 ```
 
 # Copying and License
