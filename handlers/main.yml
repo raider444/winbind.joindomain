@@ -1,0 +1,17 @@
+---
+- name: "samba_restart"
+  service: name=smbd state=restarted
+  listen: "restart_smb_winbind"
+  when: ansible_distribution == "Ubuntu"
+
+- name: "winbind_restart"
+  service: name=winbind state=restarted enabled=yes
+  listen: "restart_smb_winbind"
+
+- name: "centos smb restart"
+  service: name=smb state=restarted enabled=yes
+  when: ansible_distribution == "CentOS"
+
+- name: "sshd_reload"
+  service: name=sshd state=reloaded
+...

@@ -1,0 +1,29 @@
+---
+winbind_workgroup: BIOCAD
+
+# This must be an Active Directory user with permission to join machines
+# to the domain
+winbind_domain_admin:
+  user: "join_ad"
+  pass: "{{ vault_winbind_domain_admin_pass }}"
+
+winbind_samba_conf:
+  - { option: "security",  value: "ADS" }
+  - { option: "workgroup", value: "{{ winbind_workgroup }}" }
+  - { option: "realm",     value: "{{ winbind_domain    }}" }
+  - { option: "allow dns updates", value: "disabled"  }
+  - { option: "template shell",    value: "/bin/bash" }
+#  - { option: "template homedir",  value: "/home/%U"  }
+  - { option: "idmap config * : backend",                           value: "tdb"           }
+  - { option: "idmap config * : range",                             value: "200000-500000" }
+#  - { option: "idmap config {{ winbind_workgroup }} : backend",     value: "ad"            }
+#  - { option: "idmap config {{ winbind_workgroup }} : range",       value: "1000-199999"   }
+#  - { option: "idmap config {{ winbind_workgroup }} : default",     value: "yes"           }
+#  - { option: "idmap config {{ winbind_workgroup }} : schema_mode", value: "rfc2307"       }
+#  - { option: "winbind separator",          value: "+"       }
+  - { option: "winbind use default domain", value: "yes"     }
+  - { option: "winbind enum users",         value: "yes"     }
+  - { option: "winbind enum groups",        value: "yes"     }
+  - { option: "winbind nss info",           value: "rfc2307" }
+  - { option: "winbind refresh tickets",    value: "yes"     }
+...

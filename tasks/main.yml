@@ -1,0 +1,162 @@
+---
+- name: Install Winbind
+  apt:
+    name: "{{ item }}"
+    state: present
+  with_items:
+    - samba
+    - winbind
+    - libpam-winbind
+    - libnss-winbind
+    - krb5-config
+    - krb5-user
+    - ldap-utils
+  when: ansible_distribution == "Ubuntu"
+
+- name: "Install Winbind yum on old systems"
+  yum:
+    name: "{{ item }}"
+    state: present
+  with_items:
+    - samba4-winbind
+    - samba4-winbind-clients
+    - libsemanage-python
+    - pam_krb5
+    - samba4
+    - krb5-libs
+    - openldap-clients
+  when: ansible_distribution == "CentOS" and ansible_distribution_major_version == "6"
+
+- name: "Install Winbind yum"
+  yum:
+    name: "{{ item }}"
+    state: present
+  with_items:
+    - oddjob-mkhomedir
+    - libsemanage-python
+    - samba-winbind
+    - samba-winbind-clients
+    - pam_krb5
+    - samba
+    - krb5-libs
+    - openldap-clients
+  when: ansible_distribution == "CentOS" and ansible_distribution_major_version == "7"
+
+- name: "Update Kerberos configuration"
+  template:
+    src: "krb5.conf"
+    dest: "/etc/krb5.conf"
+  when: ansible_distribution == "Ubuntu"
+
+- name: "Update Samba configuration"
+  ini_file:
+    path: "/etc/samba/smb.conf"
+    section: "global"
+    option:  "{{ item.option  }}"
+    value:   "{{ item.value   }}"
+  with_items: "{{ winbind_samba_conf }}"
+  notify:
+    - "samba_restart"
+    - "winbind_restart"
+
+- name: "Remove Samba Printers"
+  ini_file:
+    path: "/etc/samba/smb.conf"
+    section: "{{ item }}"
+    state: "absent"
+  with_items:
+    - "printers"
+    - "print$"
+  notify: "samba_restart"
+
+- name: "Update nsswitch.conf"
+  lineinfile:
+    regexp: "{{ item.regexp }}"
+    line:   "{{ item.line   }}"
+    dest: "/etc/nsswitch.conf"
+  with_items:
+    - { regexp: '^passwd:', line: 'passwd:		compat winbind' }
+    - { regexp: '^group:' , line: 'group:		compat winbind' }
+    - { regexp: '^shadow:', line: 'shadow:		compat'         }
+  notify: "samba_restart"
+  when: ansible_distribution == "Ubuntu"
+
+- name: "Configure PAM winbind behavior"
+  template: "src=pam_winbind.conf dest=/etc/security/pam_winbind.conf"
+  notify: "winbind_restart"
+
+- name: "Configure sudoers"
+  template: "src=ldap_adm.conf dest=/etc/sudoers.d/80-ldap-users"
+  notify: "samba_restart"
+
+- name: "Configure home directory creation"
+  lineinfile:
+    dest: "/etc/pam.d/common-session"
+    regexp: "pam_mkhomedir"
+    line: "session optional        pam_mkhomedir.so skel=/etc/skel/ umask=0022"
+  when: ansible_distribution == "Ubuntu"
+  notify: "samba_restart"
+
+- name: "Run authconfig to enable winbind configuration"
+  command: authconfig --enablekrb5 --krb5kdc={% for k in winbind_krb.realms.kdc %}{{k}}{%- if not loop.last -%},{% endif %}{% endfor %} --krb5adminserver={{ winbind_krb.realms.admin_server }} --krb5realm={{ winbind_domain }} --enablewinbind --enablewinbindauth --smbsecurity=ads --smbrealm={{ winbind_domain }} --smbworkgroup={{ winbind_workgroup }} --winbindtemplateshell=/bin/bash --enablemkhomedir --enablewinbindusedefaultdomain --update
+  when: ansible_distribution == "CentOS"
+
+- name: "Check domain status"
+  command: "wbinfo --own-domain"
+  register: "domain"
+
+- name: "Join domain"
+  command: "net join -U {{ winbind_domain_admin.user }}%{{ winbind_domain_admin.pass }} createcomputer='biocad/servers/linux servers'"
+  no_log: True
+  when: domain.stdout != winbind_workgroup
+  notify: "restart_smb_winbind"
+
+- name: "Install ssh auth script"
+  template: "src=auth.sh dest=/usr/local/bin/auth mode=+x"
+
+- name: "Add auth script to ssd_config"
+  lineinfile: 
+    line: "{{ item }}"
+    dest: "/etc/ssh/sshd_config"
+  with_items:
+    - "AuthorizedKeysCommand /usr/local/bin/auth"
+    - "AuthorizedKeysCommandUser nobody"
+  notify: "sshd_reload"
+  when: not (ansible_distribution == "CentOS" and ansible_distribution_major_version == "6")
+
+- name: "Add auth script to ssh_config for old ssh"
+  lineinfile:
+    line: "{{ item }}"
+    dest: "/etc/ssh/sshd_config"
+  with_items:
+    - "AuthorizedKeysCommand /usr/local/bin/auth"
+    - "AuthorizedKeysCommandRunAs nobody"
+  notify: "sshd_reload"
+  when: ansible_distribution == "CentOS" and ansible_distribution_major_version == "6"
+
+#- name: "Keep default auth for user Ubuntu"
+#  blockinfile: 
+#    dest: "/etc/ssh/sshd_config"
+#    content: | 
+#      Match User ubuntu
+#        AuthorizedKeysFile     %h/.ssh/authorized_keys
+#  when: ansible_distribution == "Ubuntu"
+
+- name: "Disable user-configurable ssh public-keys"
+  lineinfile: regexp="^#AuthorizedKeysFile" line="AuthorizedKeysFile /dev/null" dest=/etc/ssh/sshd_config backrefs=yes
+  notify: "sshd_reload"
+
+- name: "Configure SELinux to allow use ssh script"
+  seboolean:
+    name: authlogin_nsswitch_use_ldap
+    state: yes
+    persistent: yes
+  when: ansible_selinux is defined and ansible_selinux != False and ansible_selinux.status == 'enabled' and ansible_distribution == "CentOS" and ansible_distribution_major_version == "7"
+
+#- name: "Group mapping"
+#  include_tasks: "groups.yml"
+#  vars:
+#    groupmap: "{{ item }}"
+#  with_items: "{{ winbind_groupmap_admins | union(winbind_groupmap_users)}}"
+
+...
